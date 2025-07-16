@@ -3,12 +3,13 @@ import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Highlight, themes } from 'prism-react-renderer';
-import { CopyIcon, CheckIcon } from '@radix-ui/react-icons';
+import { CopyIcon, CheckIcon, CodeIcon, FileIcon } from '@radix-ui/react-icons';
 
 type ChatMessage = {
   role: 'user' | 'assistant';
   content: string;
   timestamp?: number;
+  isFileOperation?: boolean;
 };
 
 export default function ChatPage() {
@@ -16,12 +17,57 @@ export default function ChatPage() {
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [workingDirectory, setWorkingDirectory] = useState('C:\\Users\\lears.ISRA\\Git-clones\\AI_Lear\\app');
+  const [showCommands, setShowCommands] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Load chat history from localStorage on component mount
+  // Filtro mejorado para ocultar el pensamiento del agente
+  const filterAgentThoughts = (content: string): string => {
+    return content
+      .split('\n')
+      .filter(line => {
+        const trimmed = line.trim().toLowerCase();
+        return !(
+          trimmed.startsWith('thought:') ||
+          trimmed.startsWith('action:') ||
+          trimmed.startsWith('observation:') ||
+          trimmed.startsWith('reasoning:') ||
+          trimmed.startsWith('process:') ||
+          trimmed.startsWith('analysis:') ||
+          trimmed.startsWith('step ') ||
+          trimmed.startsWith('first,') ||
+          trimmed.startsWith('next,') ||
+          trimmed.startsWith('then,') ||
+          trimmed.startsWith('finally,') ||
+          /^\[.*\]$/.test(trimmed) ||
+          /^paso \d+:/i.test(trimmed) ||
+          /^etapa \d+:/i.test(trimmed) ||
+          trimmed.startsWith('let me think') ||
+          trimmed.startsWith('i need to') ||
+          trimmed.startsWith('i should') ||
+          trimmed.startsWith('i will') ||
+          trimmed.startsWith('my approach') ||
+          trimmed.includes('thinking about') ||
+          trimmed.includes('analyzing') ||
+          /^(considering|evaluating|examining)/i.test(trimmed)
+        );
+      })
+      .join('\n')
+      .replace(/^(Muy bien|Perfecto|Excelente|Entiendo),?\s*/gm, '')
+      .replace(/\*\*Análisis:\*\*.*?\n\n/gs, '')
+      .replace(/\*\*Proceso:\*\*.*?\n\n/gs, '')
+      .replace(/\*\*Pensamiento:\*\*.*?\n\n/gs, '')
+      .replace(/```thinking[\s\S]*?```/g, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  };
+
+  // Cargar historial del localStorage
   useEffect(() => {
     const savedChat = localStorage.getItem('chatHistory');
+    const savedDir = localStorage.getItem('workingDirectory');
+    
     if (savedChat) {
       try {
         const parsedChat = JSON.parse(savedChat);
@@ -32,16 +78,24 @@ export default function ChatPage() {
         console.error('Failed to parse chat history', e);
       }
     }
+    
+    if (savedDir) {
+      setWorkingDirectory(savedDir);
+    }
   }, []);
 
-  // Save chat history to localStorage whenever it changes
+  // Guardar historial en localStorage
   useEffect(() => {
     if (chatHistory.length > 0) {
       localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
     }
   }, [chatHistory]);
 
-  // Auto-scroll to bottom when messages change
+  useEffect(() => {
+    localStorage.setItem('workingDirectory', workingDirectory);
+  }, [workingDirectory]);
+
+  // Auto-scroll
   useEffect(() => {
     scrollToBottom();
   }, [chatHistory]);
@@ -73,16 +127,19 @@ export default function ChatPage() {
     const userMessage: ChatMessage = {
       role: 'user',
       content: message,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      isFileOperation: message.startsWith('/')
     };
+    
+    const currentMessage = message;
     setMessage('');
     setIsLoading(true);
     
-    // Add user message to chat
+    // Agregar mensaje del usuario
     setChatHistory(prev => [...prev, userMessage]);
     
     try {
-      // Add temporary assistant response
+      // Mensaje temporal del asistente
       const assistantTempMessage: ChatMessage = {
         role: 'assistant',
         content: '...',
@@ -94,22 +151,29 @@ export default function ChatPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          message: userMessage.content,
+          message: currentMessage,
+          workingDirectory: workingDirectory,
           history: chatHistory
         }),
       });
       
       const data = await res.json();
       
-      // Update the last message with actual response
+      // Actualizar directorio de trabajo si cambió
+      if (data.workingDirectory) {
+        setWorkingDirectory(data.workingDirectory);
+      }
+      
+      // Actualizar última respuesta
       setChatHistory(prev => {
         const newHistory = [...prev];
         newHistory[newHistory.length - 1] = {
           role: 'assistant',
           content: data.error 
             ? `**Error:** ${data.error}`
-            : data.response,
-          timestamp: Date.now()
+            : filterAgentThoughts(data.response),
+          timestamp: Date.now(),
+          isFileOperation: data.isFileOperation
         };
         return newHistory;
       });
@@ -142,46 +206,103 @@ export default function ChatPage() {
     }
   };
 
+  const quickCommands = [
+    { cmd: '/list', desc: 'Listar archivos' },
+    { cmd: '/read ', desc: 'Leer archivo' },
+    { cmd: '/write ', desc: 'Crear/editar archivo' },
+    { cmd: '/delete ', desc: 'Eliminar archivo' },
+    { cmd: '/mkdir ', desc: 'Crear carpeta' }
+  ];
+
+  const insertCommand = (cmd: string) => {
+    setMessage(cmd);
+    setShowCommands(false);
+    textareaRef.current?.focus();
+  };
+
   return (
-    <div className="flex flex-col h-screen bg-slate-900 text-slate-900">
+    <div className="flex flex-col h-screen bg-slate-900 text-slate-100">
       {/* Header */}
-      <header className="border-b border-slate-200 bg-white">
-        <div className="max-w-4xl mx-auto p-4 flex justify-between items-center">
-          <h1 className="text-xl font-semibold text-slate-800">DeepSeek Chat</h1>
-          <div className="flex items-center space-x-4">
-            {chatHistory.length > 0 && (
-              <button 
-                onClick={clearChat}
-                className="text-sm text-slate-500 hover:text-slate-700"
+      <header className="border-b border-slate-700 bg-slate-800">
+        <div className="max-w-6xl mx-auto p-4">
+          <div className="flex justify-between items-center mb-2">
+            <h1 className="text-xl font-semibold text-white">QueenSeek Chat</h1>
+            <div className="flex items-center space-x-4">
+              <button
+                onClick={() => setShowCommands(!showCommands)}
+                className="flex items-center space-x-2 text-sm text-slate-400 hover:text-slate-200"
               >
-                Limpiar chat
+                {/* Terminal icon fallback */}
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path d="M4 17l6-6-6-6" strokeLinecap="round" strokeLinejoin="round"/>
+                  <rect x="12" y="19" width="8" height="2" rx="1" />
+                </svg>
+                <span>Comandos</span>
               </button>
-            )}
-            {isLoading ? (
-              <div className="flex space-x-1">
-                <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div>
-                <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse delay-150"></div>
-                <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse delay-300"></div>
-              </div>
-            ) : (
-              <span className="text-sm text-slate-500 flex items-center">
-                <span className="w-2 h-2 rounded-full bg-green-500 mr-2"></span>
-                En línea
-              </span>
-            )}
+              {chatHistory.length > 0 && (
+                <button 
+                  onClick={clearChat}
+                  className="text-sm text-slate-400 hover:text-slate-200"
+                >
+                  Limpiar chat
+                </button>
+              )}
+              {isLoading ? (
+                <div className="flex space-x-1">
+                  <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></div>
+                  <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse delay-150"></div>
+                  <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse delay-300"></div>
+                </div>
+              ) : (
+                <span className="text-sm text-slate-400 flex items-center">
+                  <span className="w-2 h-2 rounded-full bg-green-500 mr-2"></span>
+                  En línea
+                </span>
+              )}
+            </div>
           </div>
+          
+          {/* Working Directory */}
+          <div className="flex items-center space-x-2 text-xs text-slate-400">
+            <CodeIcon className="w-3 h-3" />
+            <span>Directorio: {workingDirectory}</span>
+          </div>
+          
+          {/* Commands Panel */}
+          {showCommands && (
+            <div className="mt-3 p-3 bg-slate-700 rounded-lg">
+              <h3 className="text-sm font-medium text-slate-200 mb-2">Comandos disponibles:</h3>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                {quickCommands.map((cmd) => (
+                  <button
+                    key={cmd.cmd}
+                    onClick={() => insertCommand(cmd.cmd)}
+                    className="flex items-center space-x-2 p-2 text-left text-xs bg-slate-600 hover:bg-slate-500 rounded"
+                  >
+                    <code className="text-blue-300">{cmd.cmd}</code>
+                    <span className="text-slate-300">{cmd.desc}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </header>
 
       {/* Chat Messages */}
-      <main className="flex-1 overflow-auto py-4 px-2 sm:px-4 max-w-4xl mx-auto w-full">
+      <main className="flex-1 overflow-auto py-4 px-2 sm:px-4 max-w-6xl mx-auto w-full">
         {chatHistory.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-8">
-            <div className="text-6xl mb-6">🤖</div>
-            <h2 className="text-2xl font-medium text-slate-500 mb-2">¡Hola! Soy QueenSeek Chat</h2>
-            <p className="text-slate-500 max-w-md">
-              Puedes preguntarme sobre cualquier tema y haré lo posible por ayudarte.
+            <div className="text-6xl mb-6">👑</div>
+            <h2 className="text-2xl font-medium text-slate-300 mb-2">¡Hola! Soy QueenSeek</h2>
+            <p className="text-slate-400 max-w-md mb-4">
+              Soy tu asistente de programación experto. Puedo ayudarte con código, gestionar archivos, 
+              explicar conceptos y resolver problemas técnicos.
             </p>
+            <div className="text-sm text-slate-500">
+              <p>💡 Usa comandos como <code className="bg-slate-700 px-1 rounded">/list</code> para gestionar archivos</p>
+              <p>📁 Directorio actual: <code className="bg-slate-700 px-1 rounded">{workingDirectory}</code></p>
+            </div>
           </div>
         ) : (
           <div className="space-y-6">
@@ -191,14 +312,25 @@ export default function ChatPage() {
                 className={`flex ${chat.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
                 <div 
-                  className={`max-w-[90%] sm:max-w-[80%] rounded-lg px-4 py-3 ${
+                  className={`max-w-[90%] sm:max-w-[85%] rounded-lg px-4 py-3 ${
                     chat.role === 'user' 
-                      ? 'bg-blue-600 text-white rounded-br-none' 
-                      : 'bg-white border border-slate-200 rounded-bl-none shadow-sm'
+                      ? chat.isFileOperation
+                        ? 'bg-purple-600 text-white rounded-br-none'
+                        : 'bg-blue-600 text-white rounded-br-none'
+                      : chat.isFileOperation
+                        ? 'bg-slate-700 border border-purple-500 rounded-bl-none'
+                        : 'bg-slate-800 border border-slate-700 rounded-bl-none'
                   }`}
                 >
+                  {chat.isFileOperation && chat.role === 'user' && (
+                    <div className="flex items-center space-x-2 mb-2 text-xs opacity-75">
+                      <FileIcon className="w-3 h-3" />
+                      <span>Comando de archivo</span>
+                    </div>
+                  )}
+                  
                   {chat.role === 'assistant' ? (
-                    <div className="prose prose-slate max-w-none">
+                    <div className="prose prose-invert max-w-none">
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
                         components={{
@@ -214,7 +346,7 @@ export default function ChatPage() {
                             if (language) {
                               return (
                                 <div className="relative my-2 rounded-md overflow-hidden">
-                                  <div className="flex justify-between items-center bg-slate-800 text-slate-100 px-2 py-1 text-xs">
+                                  <div className="flex justify-between items-center bg-slate-900 text-slate-100 px-2 py-1 text-xs">
                                     <span>{language}</span>
                                     <button
                                       onClick={() => copyToClipboard(codeString)}
@@ -258,7 +390,7 @@ export default function ChatPage() {
                             }
                             
                             return (
-                              <code className="bg-slate-100 rounded px-1 py-0.5 text-sm font-mono">
+                              <code className="bg-slate-700 rounded px-1 py-0.5 text-sm font-mono">
                                 {children}
                               </code>
                             );
@@ -280,8 +412,8 @@ export default function ChatPage() {
       </main>
 
       {/* Input Area */}
-      <footer className="border-t border-slate-200 bg-white py-4 px-2 sm:px-4">
-        <div className="max-w-4xl mx-auto">
+      <footer className="border-t border-slate-700 bg-slate-800 py-4 px-2 sm:px-4">
+        <div className="max-w-6xl mx-auto">
           <div className="flex items-end gap-2">
             <div className="flex-1 relative">
               <textarea
@@ -289,15 +421,15 @@ export default function ChatPage() {
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 onKeyDown={handleKeyPress}
-                className="w-full p-3 pr-12 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none bg-white text-slate-800"
-                placeholder="Escribe un mensaje..."
+                className="w-full p-3 pr-12 border border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none bg-slate-700 text-white placeholder-slate-400"
+                placeholder="Escribe un mensaje o usa comandos como /list, /read archivo.txt..."
                 disabled={isLoading}
                 rows={1}
                 style={{ minHeight: '44px', maxHeight: '200px' }}
               />
               <button
                 onClick={() => setMessage('')}
-                className={`absolute right-12 bottom-3 p-1 rounded-full text-slate-400 hover:text-slate-600 ${
+                className={`absolute right-12 bottom-3 p-1 rounded-full text-slate-400 hover:text-slate-200 ${
                   !message && 'hidden'
                 }`}
               >
@@ -310,7 +442,7 @@ export default function ChatPage() {
             <button
               onClick={sendMessage}
               disabled={isLoading || !message.trim()}
-              className="p-3 rounded-lg bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="p-3 rounded-lg bg-blue-600 text-white hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {isLoading ? (
                 <svg
@@ -334,8 +466,8 @@ export default function ChatPage() {
               )}
             </button>
           </div>
-          <p className="text-xs text-slate-500 mt-2 text-center">
-            Qwendeep Chat puede cometer errores. Considera verificar información importante.
+          <p className="text-xs text-slate-400 mt-2 text-center">
+            QueenSeek puede gestionar archivos y ayudarte con programación. Usa comandos como /list para explorar archivos.
           </p>
         </div>
       </footer>

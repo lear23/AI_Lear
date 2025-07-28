@@ -5,18 +5,18 @@ export const SYSTEM_CONFIG = {
     name: 'qwen3:14b',
     temperature: 0.7,
     top_p: 0.9,
-    max_tokens: 4000,
+    max_tokens: 6000,
   },
-  
+
   // Patrones para filtrar el pensamiento del agente
   THOUGHT_PATTERNS: [
     'thought:', 'action:', 'observation:', 'reasoning:', 'process:', 'analysis:',
-    'step ', 'first,', 'next,', 'then,', 'finally,', 'paso ', 'etapa ',
+    'step ', 'first,', 'next,', 'then,', 'finally:', 'paso ', 'etapa ',
     'let me think', 'i need to', 'i should', 'i will', 'my approach',
     'thinking about', 'analyzing', 'considering', 'evaluating', 'examining',
     'muy bien', 'perfecto', 'excelente', 'entiendo'
   ],
-  
+
   // Comandos disponibles
   COMMANDS: {
     '/read': 'Lee el contenido de un archivo',
@@ -26,10 +26,10 @@ export const SYSTEM_CONFIG = {
     '/mkdir': 'Crea una nueva carpeta',
     '/help': 'Muestra esta ayuda'
   },
-  
+
   // Directorio base por defecto
-  DEFAULT_DIRECTORY: 'C:\\Users\\lears.ISRA\\Git-clones\\AI_Lear\\app',
-  
+  DEFAULT_DIRECTORY: 'C:\\agent-workspace',
+
   // Extensiones de archivo soportadas
   SUPPORTED_EXTENSIONS: [
     '.js', '.jsx', '.ts', '.tsx', '.py', '.java', '.cpp', '.c', '.cs',
